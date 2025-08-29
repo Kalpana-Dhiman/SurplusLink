@@ -9,12 +9,14 @@ import toast from 'react-hot-toast';
 
 const Navbar: React.FC = () => {
   const { user, logout, updateUser } = useAuth();
-  const { notifications, getUserStats } = useApp();
+  const { notifications, getUserStats, markNotificationAsRead } = useApp();
   const { theme, toggleTheme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
+  const notificationsRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const userStats = getUserStats();
 
@@ -25,6 +27,9 @@ const Navbar: React.FC = () => {
     const handleClickOutside = (event: MouseEvent) => {
       if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
         setShowProfileMenu(false);
+      }
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
+        setShowNotifications(false);
       }
     };
 
@@ -44,8 +49,22 @@ const Navbar: React.FC = () => {
 
   const handleProfileMenuToggle = () => {
     setShowProfileMenu(!showProfileMenu);
+    setShowNotifications(false);
   };
 
+  const handleNotificationsToggle = () => {
+    setShowNotifications(!showNotifications);
+    setShowProfileMenu(false);
+  };
+
+  const handleNotificationClick = (notificationId: string) => {
+    markNotificationAsRead(notificationId);
+  };
+
+  const markAllAsRead = () => {
+    notifications.filter(n => !n.read).forEach(n => markNotificationAsRead(n.id));
+    toast.success('All notifications marked as read');
+  };
   const handleEditProfile = () => {
     setShowProfileMenu(false);
     navigate('/settings');
@@ -86,6 +105,30 @@ const Navbar: React.FC = () => {
     }
   };
 
+  const getNotificationIcon = (type: string) => {
+    switch (type) {
+      case 'item_claimed': return '🎯';
+      case 'pickup_due': return '⏰';
+      case 'near_expiry': return '⚠️';
+      case 'new_item': return '🎁';
+      case 'pickup_confirmed': return '✅';
+      default: return '📢';
+    }
+  };
+
+  const getTimeAgo = (date: Date) => {
+    const now = new Date();
+    const diffInMinutes = Math.floor((now.getTime() - date.getTime()) / (1000 * 60));
+    
+    if (diffInMinutes < 1) return 'Just now';
+    if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
+    
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 24) return `${diffInHours}h ago`;
+    
+    const diffInDays = Math.floor(diffInHours / 24);
+    return `${diffInDays}d ago`;
+  };
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-700">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -137,18 +180,104 @@ const Navbar: React.FC = () => {
             </motion.button>
 
             {/* Notifications */}
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              className="p-2 rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors relative"
-            >
-              <Bell className="w-5 h-5" />
-              {unreadNotifications > 0 && (
-                <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center animate-pulse">
-                  {unreadNotifications}
-                </span>
-              )}
-            </motion.button>
+            <div className="relative" ref={notificationsRef}>
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={handleNotificationsToggle}
+                className="p-2 rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors relative"
+              >
+                <Bell className="w-5 h-5" />
+                {unreadNotifications > 0 && (
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center animate-pulse">
+                    {unreadNotifications}
+                  </span>
+                )}
+                {showNotifications && (
+                  <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full"></div>
+                )}
+              </motion.button>
+
+              {/* Notifications Dropdown */}
+              <AnimatePresence>
+                {showNotifications && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                    transition={{ duration: 0.2 }}
+                    className="absolute right-0 mt-2 w-80 bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 py-2 z-50 max-h-96 overflow-y-auto"
+                  >
+                    {/* Header */}
+                    <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                      <h3 className="font-semibold text-gray-900 dark:text-white">Notifications</h3>
+                      {unreadNotifications > 0 && (
+                        <button
+                          onClick={markAllAsRead}
+                          className="text-sm text-green-600 dark:text-green-400 hover:text-green-500 font-medium"
+                        >
+                          Mark all read
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Notifications List */}
+                    <div className="py-2">
+                      {notifications.length === 0 ? (
+                        <div className="px-4 py-8 text-center">
+                          <Bell className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                          <p className="text-gray-500 dark:text-gray-400">No notifications yet</p>
+                        </div>
+                      ) : (
+                        notifications.slice(0, 10).map((notification) => (
+                          <motion.div
+                            key={notification.id}
+                            whileHover={{ backgroundColor: 'rgba(16, 185, 129, 0.05)' }}
+                            onClick={() => handleNotificationClick(notification.id)}
+                            className={`px-4 py-3 cursor-pointer transition-colors ${
+                              !notification.read ? 'bg-green-50 dark:bg-green-900/10' : ''
+                            }`}
+                          >
+                            <div className="flex items-start space-x-3">
+                              <span className="text-lg">{getNotificationIcon(notification.type)}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between">
+                                  <p className={`text-sm font-medium ${
+                                    !notification.read 
+                                      ? 'text-gray-900 dark:text-white' 
+                                      : 'text-gray-700 dark:text-gray-300'
+                                  }`}>
+                                    {notification.title}
+                                  </p>
+                                  {!notification.read && (
+                                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                                  )}
+                                </div>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                  {notification.message}
+                                </p>
+                                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                                  {getTimeAgo(notification.timestamp)}
+                                </p>
+                              </div>
+                            </div>
+                          </motion.div>
+                        ))
+                      )}
+                    </div>
+
+                    {/* Footer */}
+                    {notifications.length > 10 && (
+                      <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700 text-center">
+                        <button className="text-sm text-green-600 dark:text-green-400 hover:text-green-500 font-medium">
+                          View all notifications
+                        </button>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
             {/* User Profile Menu */}
             <div className="relative" ref={profileMenuRef}>
