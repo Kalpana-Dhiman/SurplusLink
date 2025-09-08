@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Item, Claim, Notification } from '../types';
 import { useAuth } from './AuthContext';
-import { sampleItems } from '../data/sampleItems';
+import apiService from '../services/apiService';
+import socketService from '../services/socketService';
 import toast from 'react-hot-toast';
 
 interface AppContextType {
@@ -32,10 +33,7 @@ export const useApp = () => {
   return context;
 };
 
-const ITEMS_KEY = 'surpluslink_items';
-const CLAIMS_KEY = 'surpluslink_claims';
 const NOTIFICATIONS_KEY = 'surpluslink_notifications';
-const SAMPLE_ITEMS_LOADED_KEY = 'surpluslink_sample_items_loaded';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
@@ -43,45 +41,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [claims, setClaims] = useState<Claim[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
-  // Load data from localStorage and add sample items if needed
+  // Load data from backend and localStorage
   useEffect(() => {
-    const storedItems = localStorage.getItem(ITEMS_KEY);
-    const storedClaims = localStorage.getItem(CLAIMS_KEY);
+    // Load notifications from localStorage
     const storedNotifications = localStorage.getItem(NOTIFICATIONS_KEY);
-    const sampleItemsLoaded = localStorage.getItem(SAMPLE_ITEMS_LOADED_KEY);
-
-    let parsedItems: Item[] = [];
-
-    if (storedItems) {
-      parsedItems = JSON.parse(storedItems).map((item: any) => ({
-        ...item,
-        expiryDate: new Date(item.expiryDate),
-        createdAt: new Date(item.createdAt),
-        pickupWindow: {
-          start: new Date(item.pickupWindow.start),
-          end: new Date(item.pickupWindow.end),
-        },
-        claimedAt: item.claimedAt ? new Date(item.claimedAt) : undefined,
-      }));
-    }
-
-    // Add sample items if they haven't been loaded before
-    if (!sampleItemsLoaded) {
-      parsedItems = [...parsedItems, ...sampleItems];
-      localStorage.setItem(SAMPLE_ITEMS_LOADED_KEY, 'true');
-    }
-
-    setItems(parsedItems);
-
-    if (storedClaims) {
-      const parsedClaims = JSON.parse(storedClaims).map((claim: any) => ({
-        ...claim,
-        claimedAt: new Date(claim.claimedAt),
-        expiresAt: new Date(claim.expiresAt),
-      }));
-      setClaims(parsedClaims);
-    }
-
     if (storedNotifications) {
       const parsedNotifications = JSON.parse(storedNotifications).map((notification: any) => ({
         ...notification,
@@ -89,46 +52,243 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }));
       setNotifications(parsedNotifications);
     }
-  }, []);
 
-  // Save data to localStorage whenever state changes
-  useEffect(() => {
-    localStorage.setItem(ITEMS_KEY, JSON.stringify(items));
-  }, [items]);
+    // Load data from backend if user is authenticated
+    if (user) {
+      loadDonations();
+      loadClaims();
+    }
+  }, [user]);
 
+  // Set up WebSocket listeners
   useEffect(() => {
-    localStorage.setItem(CLAIMS_KEY, JSON.stringify(claims));
-  }, [claims]);
+    if (!user) return;
+
+    // Set up real-time event listeners
+    const unsubscribeFunctions = [
+      socketService.on('new_donation', handleNewDonation),
+      socketService.on('donation_claimed', handleDonationClaimed),
+      socketService.on('donation_status_updated', handleDonationStatusUpdated),
+      socketService.on('pickup_confirmed', handlePickupConfirmed),
+      socketService.on('donation_collected', handleDonationCollected),
+      socketService.on('claim_cancelled', handleClaimCancelled),
+      socketService.on('claim_created', handleClaimCreated),
+    ];
+
+    // Cleanup function
+    return () => {
+      unsubscribeFunctions.forEach(unsubscribe => unsubscribe());
+    };
+  }, [user]);
+
+  // Load donations from backend
+  const loadDonations = async () => {
+    try {
+      const data = await apiService.getDonations({
+        status: 'available',
+        limit: 50
+      });
+      setItems(data.donations || []);
+    } catch (error) {
+      console.error('Failed to load donations:', error);
+    }
+  };
+
+  // Load claims from backend
+  const loadClaims = async () => {
+    try {
+      const data = await apiService.getMyClaims();
+      setClaims(data.claims || []);
+    } catch (error) {
+      console.error('Failed to load claims:', error);
+    }
+  };
+
+  // WebSocket event handlers
+  const handleNewDonation = (data: any) => {
+    const newItem = transformBackendDonation(data.donation);
+    setItems(prev => [newItem, ...prev]);
+    addNotification({
+      type: 'new_item',
+      title: 'New Donation Available!',
+      message: `${data.donation.name} is now available for claiming`,
+      read: false,
+    });
+  };
+
+  const handleDonationClaimed = (data: any) => {
+    const updatedItem = transformBackendDonation(data.donation);
+    setItems(prev => prev.map(item => 
+      item.id === updatedItem.id ? updatedItem : item
+    ));
+  };
+
+  const handleDonationStatusUpdated = (data: any) => {
+    const updatedItem = transformBackendDonation(data.donation);
+    setItems(prev => prev.map(item => 
+      item.id === updatedItem.id ? updatedItem : item
+    ));
+  };
+
+  const handlePickupConfirmed = (data: any) => {
+    addNotification({
+      type: 'pickup_confirmed',
+      title: 'Pickup Confirmed!',
+      message: data.message,
+      read: false,
+    });
+  };
+
+  const handleDonationCollected = (data: any) => {
+    const updatedItem = transformBackendDonation(data.donation);
+    setItems(prev => prev.map(item => 
+      item.id === updatedItem.id ? updatedItem : item
+    ));
+    addNotification({
+      type: 'pickup_due',
+      title: 'Item Collected!',
+      message: data.message,
+      read: false,
+    });
+  };
+
+  const handleClaimCancelled = (data: any) => {
+    const updatedItem = transformBackendDonation(data.donation);
+    setItems(prev => prev.map(item => 
+      item.id === updatedItem.id ? updatedItem : item
+    ));
+  };
+
+  const handleClaimCreated = (data: any) => {
+    const newClaim = transformBackendClaim(data.claim);
+    setClaims(prev => [newClaim, ...prev]);
+    addNotification({
+      type: 'item_claimed',
+      title: 'Item Claimed Successfully!',
+      message: `You claimed ${data.claim.donation.name}. OTP: ${data.otp}`,
+      read: false,
+      data: { itemId: data.claim.donation._id, otp: data.otp },
+    });
+  };
+
+  // Transform backend donation to frontend format
+  const transformBackendDonation = (backendDonation: any): Item => {
+    return {
+      id: backendDonation._id,
+      name: backendDonation.name,
+      category: backendDonation.category,
+      quantity: backendDonation.quantity,
+      unit: backendDonation.unit,
+      expiryDate: new Date(backendDonation.expiryDate),
+      description: backendDonation.description || '',
+      images: backendDonation.images || [],
+      location: {
+        lat: backendDonation.location.coordinates.lat,
+        lng: backendDonation.location.coordinates.lng,
+        address: backendDonation.location.address,
+      },
+      donor: {
+        id: backendDonation.donor._id,
+        name: backendDonation.donor.name,
+        email: backendDonation.donor.email,
+        role: backendDonation.donor.role,
+        donationIntegrityScore: backendDonation.donor.donationIntegrityScore,
+        createdAt: new Date(backendDonation.donor.createdAt),
+      },
+      status: backendDonation.status,
+      claimedBy: backendDonation.claimedBy ? {
+        id: backendDonation.claimedBy._id,
+        name: backendDonation.claimedBy.name,
+        email: backendDonation.claimedBy.email,
+        role: backendDonation.claimedBy.role,
+        donationIntegrityScore: backendDonation.claimedBy.donationIntegrityScore,
+        createdAt: new Date(backendDonation.claimedBy.createdAt),
+      } : undefined,
+      claimedAt: backendDonation.claimedAt ? new Date(backendDonation.claimedAt) : undefined,
+      pickupWindow: {
+        start: new Date(backendDonation.pickupWindow.start),
+        end: new Date(backendDonation.pickupWindow.end),
+      },
+      otp: backendDonation.otp,
+      createdAt: new Date(backendDonation.createdAt),
+    };
+  };
+
+  // Transform backend claim to frontend format
+  const transformBackendClaim = (backendClaim: any): Claim => {
+    return {
+      id: backendClaim._id,
+      item: transformBackendDonation(backendClaim.donation),
+      claimant: {
+        id: backendClaim.claimant._id,
+        name: backendClaim.claimant.name,
+        email: backendClaim.claimant.email,
+        role: backendClaim.claimant.role,
+        donationIntegrityScore: backendClaim.claimant.donationIntegrityScore,
+        createdAt: new Date(backendClaim.claimant.createdAt),
+      },
+      claimedAt: new Date(backendClaim.claimedAt),
+      expiresAt: new Date(backendClaim.expiresAt),
+      status: backendClaim.status,
+      otp: backendClaim.otp,
+      rating: backendClaim.feedback?.rating,
+      feedback: backendClaim.feedback?.comment,
+      proofImage: backendClaim.proofImages?.[0],
+    };
+  };
+
+  // Save notifications to localStorage whenever they change
 
   useEffect(() => {
     localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(notifications));
   }, [notifications]);
 
-  const addItem = (itemData: Omit<Item, 'id' | 'donor' | 'createdAt' | 'status'>) => {
+  const addItem = async (itemData: Omit<Item, 'id' | 'donor' | 'createdAt' | 'status'>) => {
     if (!user) return;
 
-    const newItem: Item = {
-      ...itemData,
-      id: Date.now().toString(),
-      donor: user,
-      status: 'available',
-      createdAt: new Date(),
-    };
+    try {
+      // Transform frontend data to backend format
+      const backendData = {
+        name: itemData.name,
+        category: itemData.category,
+        quantity: itemData.quantity,
+        unit: itemData.unit,
+        expiryDate: itemData.expiryDate.toISOString(),
+        description: itemData.description,
+        images: itemData.images,
+        location: {
+          address: itemData.location.address,
+          coordinates: {
+            lat: itemData.location.lat,
+            lng: itemData.location.lng,
+          },
+        },
+        pickupWindow: {
+          start: itemData.pickupWindow.start.toISOString(),
+          end: itemData.pickupWindow.end.toISOString(),
+        },
+      };
 
-    setItems(prev => [newItem, ...prev]);
-    
-    // Add notification for successful donation
-    addNotification({
-      type: 'new_item',
-      title: 'Item Donated Successfully!',
-      message: `Your ${newItem.name} is now available for claiming`,
-      read: false,
-    });
+      const data = await apiService.createDonation(backendData);
+      const newItem = transformBackendDonation(data.donation);
+      
+      setItems(prev => [newItem, ...prev]);
+      
+      addNotification({
+        type: 'new_item',
+        title: 'Item Donated Successfully!',
+        message: `Your ${newItem.name} is now available for claiming`,
+        read: false,
+      });
 
-    toast.success('Item donated successfully! It\'s now available for others to claim.');
+      toast.success('Item donated successfully! It\'s now available for others to claim.');
+    } catch (error: any) {
+      console.error('Failed to create donation:', error);
+      toast.error(error.message || 'Failed to donate item. Please try again.');
+    }
   };
 
-  const claimItem = (itemId: string) => {
+  const claimItem = async (itemId: string) => {
     if (!user) return;
 
     const item = items.find(i => i.id === itemId);
@@ -142,49 +302,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    const otp = Math.floor(1000 + Math.random() * 9000).toString();
-    const claimExpiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
-
-    const newClaim: Claim = {
-      id: Date.now().toString(),
-      item,
-      claimant: user,
-      claimedAt: new Date(),
-      expiresAt: claimExpiresAt,
-      status: 'pending',
-      otp,
-    };
-
-    setClaims(prev => [newClaim, ...prev]);
-
-    // Update item status
-    setItems(prev => prev.map(i => 
-      i.id === itemId 
-        ? { ...i, status: 'claimed', claimedBy: user, claimedAt: new Date(), otp }
-        : i
-    ));
-
-    // Add notifications
-    addNotification({
-      type: 'item_claimed',
-      title: 'Item Claimed Successfully!',
-      message: `You claimed ${item.name}. OTP: ${otp}. You have 15 minutes to confirm pickup.`,
-      read: false,
-      data: { itemId, otp },
-    });
-
-    toast.success(`Item claimed! Your OTP is: ${otp}. You have 15 minutes to confirm pickup.`);
-
-    // Simulate donor notification
-    setTimeout(() => {
-      toast(`📱 ${item.donor.name} has been notified about your claim`, {
-        icon: '🔔',
-        duration: 3000,
+    try {
+      const data = await apiService.claimDonation(itemId, {
+        reason: 'Needed for community support'
       });
-    }, 1000);
+      
+      // Update local state
+      const updatedItem = { ...item, status: 'claimed' as const, claimedBy: user, claimedAt: new Date(), otp: data.otp };
+      setItems(prev => prev.map(i => i.id === itemId ? updatedItem : i));
+      
+      const newClaim = transformBackendClaim(data.claim);
+      setClaims(prev => [newClaim, ...prev]);
+
+      toast.success(`Item claimed! Your OTP is: ${data.otp}. You have 15 minutes to confirm pickup.`);
+    } catch (error: any) {
+      console.error('Failed to claim item:', error);
+      toast.error(error.message || 'Failed to claim item. Please try again.');
+    }
   };
 
-  const confirmPickup = (itemId: string, enteredOtp: string) => {
+  const confirmPickup = async (itemId: string, enteredOtp: string) => {
     const claim = claims.find(c => c.item.id === itemId && c.status === 'pending');
     
     if (!claim) {
@@ -192,69 +329,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    if (claim.otp !== enteredOtp) {
-      // Easter egg for wrong OTP
-      toast.error('🚨 Imposter Detected! Wrong OTP entered', {
-        duration: 5000,
-        style: {
-          background: '#ff4444',
-          color: 'white',
-        },
+    try {
+      await apiService.confirmPickup(claim.id, enteredOtp);
+      
+      // Update local state
+      setClaims(prev => prev.map(c => 
+        c.id === claim.id ? { ...c, status: 'confirmed' } : c
+      ));
+
+      addNotification({
+        type: 'pickup_confirmed',
+        title: 'Pickup Confirmed!',
+        message: `Pickup confirmed for ${claim.item.name}. Please proceed to collect the item.`,
+        read: false,
       });
-      
-      // Play a sound effect (if browser supports it)
-      try {
-        const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT');
-        audio.play().catch(() => {}); // Ignore errors if audio fails
-      } catch (e) {}
-      
+
+      toast.success('Pickup confirmed! Please proceed to collect the item.');
+    } catch (error: any) {
+      console.error('Failed to confirm pickup:', error);
+      if (error.message.includes('Invalid OTP')) {
+        toast.error('🚨 Imposter Detected! Wrong OTP entered', {
+          duration: 5000,
+          style: {
+            background: '#ff4444',
+            color: 'white',
+          },
+        });
+      } else {
+        toast.error(error.message || 'Failed to confirm pickup');
+      }
+    }
+  };
+
+  const markAsCollected = async (itemId: string) => {
+    const claim = claims.find(c => c.item.id === itemId);
+    
+    if (!claim) {
+      toast.error('No claim found for this item');
       return;
     }
 
-    // Update claim status
-    setClaims(prev => prev.map(c => 
-      c.id === claim.id 
-        ? { ...c, status: 'confirmed' }
-        : c
-    ));
+    try {
+      await apiService.markAsCollected(claim.id, {
+        rating: 5,
+        comment: 'Great donation, thank you!'
+      });
+      
+      // Update local state
+      setItems(prev => prev.map(i => 
+        i.id === itemId ? { ...i, status: 'collected' } : i
+      ));
+      
+      setClaims(prev => prev.map(c => 
+        c.id === claim.id ? { ...c, status: 'collected' } : c
+      ));
 
-    addNotification({
-      type: 'pickup_confirmed',
-      title: 'Pickup Confirmed!',
-      message: `Pickup confirmed for ${claim.item.name}. Please proceed to collect the item.`,
-      read: false,
-    });
-
-    toast.success('Pickup confirmed! Please proceed to collect the item.');
-  };
-
-  const markAsCollected = (itemId: string) => {
-    // Update item status
-    setItems(prev => prev.map(i => 
-      i.id === itemId 
-        ? { ...i, status: 'collected' }
-        : i
-    ));
-
-    // Update claim status
-    setClaims(prev => prev.map(c => 
-      c.item.id === itemId 
-        ? { ...c, status: 'collected' }
-        : c
-    ));
-
-    const item = items.find(i => i.id === itemId);
-    if (item) {
       addNotification({
         type: 'pickup_due',
         title: 'Item Collected!',
-        message: `${item.name} has been successfully collected. Thank you for making a difference!`,
+        message: `${claim.item.name} has been successfully collected. Thank you for making a difference!`,
         read: false,
       });
 
       toast.success('Item marked as collected! Thank you for making a difference!');
+    } catch (error: any) {
+      console.error('Failed to mark as collected:', error);
+      toast.error(error.message || 'Failed to mark as collected');
     }
-  };
+    };
 
   const addNotification = (notificationData: Omit<Notification, 'id' | 'timestamp'>) => {
     const newNotification: Notification = {
