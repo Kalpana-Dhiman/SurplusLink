@@ -1,7 +1,7 @@
 // API Service for SurplusLink Backend Integration
 class ApiService {
   constructor() {
-    this.baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+    this.baseURL = process.env.NEXT_PUBLIC_API_URL || 'https://surpluslink.onrender.com';
     this.token = null;
     
     // Initialize token from localStorage if available
