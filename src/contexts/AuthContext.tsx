@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User } from '../types';
+import apiService from '../services/apiService';
+import socketService from '../services/socketService';
 import toast from 'react-hot-toast';
 
 interface AuthContextType {
@@ -21,68 +23,45 @@ export const useAuth = () => {
   return context;
 };
 
-// Mock database for users
-const USERS_KEY = 'surpluslink_users';
-const CURRENT_USER_KEY = 'surpluslink_current_user';
-
-const getStoredUsers = (): User[] => {
-  const stored = localStorage.getItem(USERS_KEY);
-  return stored ? JSON.parse(stored) : [];
-};
-
-const saveUsers = (users: User[]) => {
-  localStorage.setItem(USERS_KEY, JSON.stringify(users));
-};
-
-const findUserByEmail = (email: string): User | null => {
-  const users = getStoredUsers();
-  return users.find(user => user.email.toLowerCase() === email.toLowerCase()) || null;
-};
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check for stored current user
-    const storedUser = localStorage.getItem(CURRENT_USER_KEY);
-    if (storedUser) {
-      try {
-        const userData = JSON.parse(storedUser);
-        // Verify user still exists in users database
-        const existingUser = findUserByEmail(userData.email);
-        if (existingUser) {
-          setUser(existingUser);
-        } else {
-          localStorage.removeItem(CURRENT_USER_KEY);
+    // Check for stored token and validate with backend
+    const initAuth = async () => {
+      const token = localStorage.getItem('surpluslink_token');
+      if (token) {
+        try {
+          apiService.setToken(token);
+          const userData = await apiService.getCurrentUser();
+          setUser(userData.user);
+          
+          // Connect to WebSocket
+          socketService.connect(token);
+        } catch (error) {
+          console.error('Auth initialization error:', error);
+          // Token is invalid, clear it
+          apiService.logout();
         }
-      } catch (error) {
-        localStorage.removeItem(CURRENT_USER_KEY);
       }
-    }
-    setLoading(false);
+      setLoading(false);
+    };
+
+    initAuth();
   }, []);
 
   const login = async (email: string, password: string) => {
     setLoading(true);
     
     try {
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      const data = await apiService.login(email, password);
+      setUser(data.user);
       
-      const existingUser = findUserByEmail(email);
+      // Connect to WebSocket
+      socketService.connect(data.token);
       
-      if (!existingUser) {
-        throw new Error('No account found with this email. Please sign up first.');
-      }
-      
-      // In a real app, you'd verify the password hash
-      // For demo purposes, we'll accept any password for existing users
-      
-      setUser(existingUser);
-      localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(existingUser));
-      
-    } catch (error) {
+    } catch (error: any) {
       throw error;
     } finally {
       setLoading(false);
@@ -93,59 +72,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(true);
     
     try {
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      const existingUser = findUserByEmail(email);
-      
-      if (existingUser) {
-        throw new Error('An account with this email already exists. Please login instead.');
-      }
-      
-      const newUser: User = {
-        id: Date.now().toString(),
-        email: email.toLowerCase(),
+      const data = await apiService.signup({
         name,
-        role,
-        donationIntegrityScore: 5.0,
-        createdAt: new Date(),
-      };
+        email,
+        password,
+        role
+      });
+      setUser(data.user);
       
-      const users = getStoredUsers();
-      users.push(newUser);
-      saveUsers(users);
+      // Connect to WebSocket
+      socketService.connect(data.token);
       
-      setUser(newUser);
-      localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(newUser));
-      
-    } catch (error) {
+    } catch (error: any) {
       throw error;
     } finally {
       setLoading(false);
     }
   };
 
-  const updateUser = (updates: Partial<User>) => {
+  const updateUser = async (updates: Partial<User>) => {
     if (!user) return;
 
-    const updatedUser = { ...user, ...updates };
-    
-    // Update in users database
-    const users = getStoredUsers();
-    const userIndex = users.findIndex(u => u.id === user.id);
-    if (userIndex !== -1) {
-      users[userIndex] = updatedUser;
-      saveUsers(users);
+    try {
+      const data = await apiService.updateProfile(updates);
+      setUser(data.user);
+    } catch (error: any) {
+      try {
+        // Fallback to local update if backend fails
+        const updatedUser = { ...user, ...updates };
+        setUser(updatedUser);
+      } catch (error) {
+        console.error('Failed to update user:', error);
+        throw error;
+      }
     }
-    
-    // Update current user
-    setUser(updatedUser);
-    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(updatedUser));
   };
 
   const logout = () => {
+    // Disconnect WebSocket
+    socketService.disconnect();
+    
+    // Clear API token
+    apiService.logout();
+    
+    // Clear user state
     setUser(null);
-    localStorage.removeItem(CURRENT_USER_KEY);
     toast.success('Logged out successfully');
   };
 
