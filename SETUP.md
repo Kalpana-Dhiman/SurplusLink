@@ -54,7 +54,7 @@ CLIENT_URL=http://localhost:3000
 
 ### Frontend (.env.local)
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:5000/api
+VITE_NEXT_PUBLIC_API_URL=http://localhost:5000/api
 ```
 
 ## 🌐 Production Deployment
@@ -76,7 +76,7 @@ NEXT_PUBLIC_API_URL=http://localhost:5000/api
 1. Deploy to Vercel as usual
 2. Set environment variable:
    ```
-   NEXT_PUBLIC_API_URL=https://your-backend-url.com/api
+   VITE_NEXT_PUBLIC_API_URL=https://your-backend-url.com/api
    ```
 
 ## ✅ Testing the Integration
