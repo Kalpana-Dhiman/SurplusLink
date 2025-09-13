@@ -20,6 +20,8 @@ const server = http.createServer(app);
 const corsOptions = {
   origin: [
     'https://surplus-link.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:3000',
     'http://localhost:3000',
     'http://localhost:5173'
   ],

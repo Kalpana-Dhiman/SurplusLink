@@ -14,7 +14,7 @@ class SocketService {
     }
 
     const socketURL = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:5000';
-    const socketURL = import.meta.env.VITE_NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:5000';
+    const socketURL = import.meta.env.VITE_NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000';
 
     this.socket = io(socketURL, {
       auth: { token },
