@@ -7,7 +7,7 @@ const connectDB = async () => {
       useUnifiedTopology: true,
     });
 
-    console.log(`📦 MongoDB Connected: ${conn.connection.host}`);
+    console.log('MongoDb URI:', process.env.MONGODB_URI);
     
     // Handle connection events
     mongoose.connection.on('error', (err) => {
